@@ -46,12 +46,14 @@
 #include "vtkSmartPointer.h"
 #include "vtkInformationVector.h"
 #include "vtkInformation.h"
+#include "vtk_zlib.h"
 
 vtkStandardNewMacro(vtkOBJWriter);
 
 vtkOBJWriter::vtkOBJWriter()
 {
   this->FileName = NULL;
+  this->bCompress = false;
 
   this->SetNumberOfInputPorts(1);
   this->SetNumberOfOutputPorts(0);
@@ -65,11 +67,257 @@ vtkOBJWriter::~vtkOBJWriter()
     }
 }
 
-int vtkOBJWriter::RequestData(vtkInformation *vtkNotUsed(request),
-                               vtkInformationVector **inputVector,
-                               vtkInformationVector *vtkNotUsed(outputVector))
+void vtkOBJWriter::SetOutputCompressed(bool bCompressed)
 {
+	this->bCompress = bCompressed;
+}
 
+int vtkOBJWriter::RequestData(vtkInformation *vtkNotUsed(request),
+	vtkInformationVector **inputVector,
+	vtkInformationVector *vtkNotUsed(outputVector))
+{
+	if (bCompress)
+	{
+		return RequestDataCompress(inputVector);
+	}
+	else
+	{
+		return RequestDataOrigin(inputVector);
+	}
+}
+
+int vtkOBJWriter::RequestDataCompress(vtkInformationVector **inputVector)
+{
+	//Get the input
+	vtkInformation *inInfo = inputVector[0]->GetInformationObject(0);
+	vtkPolyData *pd = vtkPolyData::SafeDownCast(
+		inInfo->Get(vtkDataObject::DATA_OBJECT()));
+
+	//open the file for writing
+	//std::ofstream fout(this->FileName);
+	size_t n = strlen(this->FileName);
+	char *newname = new char[n + 4];
+	//vtkSmartPointer<char> newname = new char[n + 4];
+	memcpy(newname, this->FileName, n);
+	newname[n] = '.';
+	newname[n+1] = 'g';
+	newname[n+2] = 'z';
+	newname[n+3] = 0;
+	gzFile file = gzopen(newname, "wb");
+
+	//write header
+	//fout << "# wavefront obj file written by the visualization toolkit" << endl << endl;
+	gzwrite(file, "# wavefront obj file written by the visualization toolkit\n\n", strlen("# wavefront obj file written by the visualization toolkit\n\n"));
+
+	//fout << "mtllib NONE" << endl << endl;
+	gzwrite(file, "mtllib NONE\n\n", strlen("mtllib NONE\n\n"));
+
+	vtkSmartPointer<vtkPointData> pntData;
+	vtkSmartPointer<vtkPoints> points;
+	vtkSmartPointer<vtkDataArray> tcoords;
+	int i, i1, i2, idNext;
+	int idStart = 1;
+	double p[3];
+	vtkCellArray *cells;
+	vtkIdType npts = 0;
+	vtkIdType *indx = 0;
+
+	// write out the points
+	for (i = 0; i < pd->GetNumberOfPoints(); i++)
+	{
+		pd->GetPoint(i, p);
+		//fout << "v " << p[0] << " " << p[1] << " " << p[2] << endl;
+		gzprintf(file, "v %f %f %f\n", p[0], p[1], p[2]);
+	}
+
+	//idNext = idStart + static_cast<int>(pd->GetNumberOfPoints());
+
+	// write out the point data
+
+	vtkSmartPointer<vtkDataArray> normals = pd->GetPointData()->GetNormals();
+	if (normals)
+	{
+		for (i = 0; i < normals->GetNumberOfTuples(); i++)
+		{
+			normals->GetTuple(i, p);
+			//fout << "vn " << p[0] << " " << p[1] << " " << p[2] << endl;
+			gzprintf(file, "vn %f %f %f\n", p[0], p[1], p[2]);
+		}
+	}
+
+	tcoords = pd->GetPointData()->GetTCoords();
+	if (tcoords)
+	{
+		for (i = 0; i < tcoords->GetNumberOfTuples(); i++)
+		{
+			tcoords->GetTuple(i, p);
+			//fout << "vt " << p[0] << " " << p[1] << endl;
+			gzprintf(file, "vt %f %f\n", p[0], p[1]);
+		}
+	}
+
+	// write out a group name and material
+	//fout << endl << "g grp" << idStart << endl;
+	//fout << "usemtl mtlNONE" << endl;
+	gzprintf(file, "\ng grp%d\nusemtl mtlNONE\n", idStart);
+
+	// write out verts if any
+	if (pd->GetNumberOfVerts() > 0)
+	{
+		cells = pd->GetVerts();
+		for (cells->InitTraversal(); cells->GetNextCell(npts, indx);)
+		{
+			//fout << "p ";
+			gzwrite(file, "p ", strlen("p "));
+			for (i = 0; i < npts; i++)
+			{
+				//fout << static_cast<int>(indx[i]) + idStart << " ";
+				gzprintf(file, "%d ", static_cast<int>(indx[i]) + idStart);
+			}
+			//fout << endl;
+			gzwrite(file, "\n", strlen("\n"));
+		}
+	}
+
+	// write out lines if any
+	if (pd->GetNumberOfLines() > 0)
+	{
+		cells = pd->GetLines();
+		for (cells->InitTraversal(); cells->GetNextCell(npts, indx);)
+		{
+			//fout << "l ";
+			gzwrite(file, "l ", strlen("l "));
+			if (tcoords)
+			{
+				for (i = 0; i < npts; i++)
+				{
+					//fout << static_cast<int>(indx[i]) + idStart << "/" << static_cast<int>(indx[i]) + idStart << " ";
+					gzprintf(file, "%d/%d ", static_cast<int>(indx[i]) + idStart, static_cast<int>(indx[i]) + idStart);
+				}
+			}
+			else
+			{
+				for (i = 0; i < npts; i++)
+				{
+					//fout << static_cast<int>(indx[i]) + idStart << " ";
+					gzprintf(file, "%d ", static_cast<int>(indx[i]) + idStart);
+				}
+			}
+			//fout << endl;
+			gzwrite(file, "\n", strlen("\n"));
+		}
+	}
+
+	// write out polys if any
+	if (pd->GetNumberOfPolys() > 0)
+	{
+		cells = pd->GetPolys();
+		for (cells->InitTraversal(); cells->GetNextCell(npts, indx);)
+		{
+			//fout << "f ";
+			gzwrite(file, "f ", strlen("f "));
+			for (i = 0; i < npts; i++)
+			{
+				if (normals)
+				{
+					if (tcoords)
+					{
+						//fout << static_cast<int>(indx[i]) + idStart << "/" << static_cast<int>(indx[i]) + idStart << "/" << static_cast<int>(indx[i]) + idStart << " ";
+						gzprintf(file, "%d/%d/%d ", static_cast<int>(indx[i]) + idStart, static_cast<int>(indx[i]) + idStart, static_cast<int>(indx[i]) + idStart);
+					}
+					else
+					{
+						//fout << static_cast<int>(indx[i]) + idStart << "//" << static_cast<int>(indx[i]) + idStart << " ";
+						gzprintf(file, "%d//%d ", static_cast<int>(indx[i]) + idStart, static_cast<int>(indx[i]) + idStart);
+					}
+				}
+				else
+				{
+					if (tcoords)
+					{
+						//fout << static_cast<int>(indx[i]) + idStart << " " << static_cast<int>(indx[i]) + idStart << " ";
+						gzprintf(file, "%d %d ", static_cast<int>(indx[i]) + idStart, static_cast<int>(indx[i]) + idStart);
+					}
+					else
+					{
+						//fout << static_cast<int>(indx[i]) + idStart << " ";
+						gzprintf(file, "%d ", static_cast<int>(indx[i]) + idStart);
+					}
+				}
+			}
+			//fout << endl;
+			gzwrite(file, "\n", strlen("\n"));
+		}
+	}
+
+	// write out tstrips if any
+	if (pd->GetNumberOfStrips() > 0)
+	{
+		cells = pd->GetStrips();
+		for (cells->InitTraversal(); cells->GetNextCell(npts, indx);)
+		{
+			for (i = 2; i < npts; i++)
+			{
+				if (i % 2)
+				{
+					i1 = i - 1;
+					i2 = i - 2;
+				}
+				else
+				{
+					i1 = i - 1;
+					i2 = i - 2;
+				}
+				if (normals)
+				{
+					if (tcoords)
+					{
+						//fout << "f " << static_cast<int>(indx[i1]) + idStart << "/" << static_cast<int>(indx[i1]) + idStart << "/" << static_cast<int>(indx[i1]) + idStart << " ";
+						//fout << static_cast<int>(indx[i2]) + idStart << "/" << static_cast<int>(indx[i2]) + idStart << "/" << static_cast<int>(indx[i2]) + idStart << " ";
+						//fout << static_cast<int>(indx[i]) + idStart << "/" << static_cast<int>(indx[i]) + idStart << "/" << static_cast<int>(indx[i]) + idStart << endl;
+						gzprintf(file, "f %d/%d/%d %d/%d/%d %d/%d/%d\n", static_cast<int>(indx[i1]) + idStart, static_cast<int>(indx[i1]) + idStart, static_cast<int>(indx[i1]) + idStart, \
+							static_cast<int>(indx[i2]) + idStart, static_cast<int>(indx[i2]) + idStart, static_cast<int>(indx[i2]) + idStart, \
+							static_cast<int>(indx[i]) + idStart, static_cast<int>(indx[i]) + idStart, static_cast<int>(indx[i]) + idStart);
+					}
+					else
+					{
+						//fout << "f " << static_cast<int>(indx[i1]) + idStart << "//" << static_cast<int>(indx[i1]) + idStart << " ";
+						//fout << static_cast<int>(indx[i2]) + idStart << "//" << static_cast<int>(indx[i2]) + idStart << " ";
+						//fout << static_cast<int>(indx[i]) + idStart << "//" << static_cast<int>(indx[i]) + idStart << endl;
+						gzprintf(file, "f %d//%d %d//%d %d//%d\n", static_cast<int>(indx[i1]) + idStart, static_cast<int>(indx[i1]) + idStart, \
+							static_cast<int>(indx[i2]) + idStart, static_cast<int>(indx[i2]) + idStart, \
+							static_cast<int>(indx[i]) + idStart, static_cast<int>(indx[i]) + idStart);
+					}
+				}
+				else
+				{
+					if (tcoords)
+					{
+						//fout << "f " << static_cast<int>(indx[i1]) + idStart << "/" << static_cast<int>(indx[i1]) + idStart << " ";
+						//fout << static_cast<int>(indx[i2]) + idStart << "/" << static_cast<int>(indx[i2]) + idStart << " ";
+						//fout << static_cast<int>(indx[i]) + idStart << "/" << static_cast<int>(indx[i]) + idStart << endl;
+						gzprintf(file, "f %d/%d %d/%d %d/%d\n", static_cast<int>(indx[i1]) + idStart, static_cast<int>(indx[i1]) + idStart, \
+							static_cast<int>(indx[i2]) + idStart, static_cast<int>(indx[i2]) + idStart, \
+							static_cast<int>(indx[i]) + idStart, static_cast<int>(indx[i]) + idStart);
+					}
+					else
+					{
+						//fout << "f " << static_cast<int>(indx[i1]) + idStart << " " << static_cast<int>(indx[i2]) + idStart << " " << static_cast<int>(indx[i]) + idStart << endl;
+						gzprintf(file, "f %d %d %d\n", static_cast<int>(indx[i1]) + idStart, static_cast<int>(indx[i2]) + idStart, static_cast<int>(indx[i]) + idStart);
+					}
+				}
+			}
+		}
+	}
+
+	gzclose(file);
+	delete newname;
+
+	return 1;
+}
+
+int vtkOBJWriter::RequestDataOrigin(vtkInformationVector **inputVector)
+{
   //Get the input
   vtkInformation *inInfo = inputVector[0]->GetInformationObject(0);
   vtkPolyData *pd = vtkPolyData::SafeDownCast(

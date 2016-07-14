@@ -42,15 +42,21 @@ public:
 
   int RequestData(vtkInformation *, vtkInformationVector **, vtkInformationVector *);
 
+  void SetOutputCompressed(bool);
+
 protected:
   vtkOBJWriter();
   ~vtkOBJWriter();
 
 private:
+  int RequestDataOrigin(vtkInformationVector **);
+  int RequestDataCompress(vtkInformationVector **);
+
   vtkOBJWriter(const vtkOBJWriter&);  // Not implemented.
   void operator=(const vtkOBJWriter&);  // Not implemented.
 
   char *FileName;
+  bool bCompress;
 };
 
 #endif
